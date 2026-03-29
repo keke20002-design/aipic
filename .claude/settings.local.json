@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter --version)",
+      "Bash(flutter create:*)",
+      "Bash(flutter pub:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(find C:/Users/test/AppData/Local/Pub/Cache -name content.dart -path *google_generative*)",
+      "Bash(flutter build:*)",
+      "Bash(wmic logicaldisk:*)",
+      "Bash(powershell -Command \"\\(Get-ChildItem ''C:\\\\Users\\\\test\\\\StudioProjects\\\\aipic\\\\build'' -Recurse | Measure-Object -Property Length -Sum\\).Sum / 1MB\")",
+      "Bash(flutter clean:*)"
+    ]
+  }
+}
