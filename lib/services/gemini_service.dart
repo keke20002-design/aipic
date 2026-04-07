@@ -25,15 +25,19 @@ class GeminiService {
     "target_name": "분석 대상 이름",
     "state_score": 0.85,
     "summary": "핵심 상태를 한 문장으로 요약 (감정적이고 직관적인 표현)",
+    "one_liner_dis": "날카롭고 위트있는 한 줄 평가. 살짝 찌르되 기분 나쁘지 않게 비꼬기. 예: '역시 완벽하면 정 없지. 저 침대의 역동적인 주름이 이 방의 유일한 예술적 포인트라고 봐' / '미니멀리즘의 정석이네. 너무 정갈해서 숨소리도 조심해야 할 것 같아. 혹시 인테리어 컨셉이 '수도원'이야?'",
     "key_characteristics": ["특징 1", "특징 2", "특징 3", "특징 4"],
     "icon_suggestions": ["sun", "playground", "safety", "clean"],
     "detailed_description": "상태에 대한 상세 서술",
     "recommendations": ["추천 조치 1", "추천 조치 2"],
+    "recommendation_scores": [3, 2],
     "status_color_code": "#HEX색상코드"
   }
 }
 
-summary: 분석 결과를 한 문장으로 요약. 직관적이고 감정이 담긴 표현 사용.
+summary: 분석 결과를 한 문장으로 요약. 위트있고 감성적인 표현 사용. 예: '여기서 자면 알람 필요 없겠는데요', '침대가 사람을 유혹하는 수준입니다'
+one_liner_dis: 기분 안 나쁘게 비꼬기, 위트 한 스푼 섞어서 뼈만 살짝 때려볼게요. 상대방이 웃으면서도 "어라, 이거 나 까는 건가?" 싶게 만드는 게 포인트입니다.
+recommendation_scores: 각 추천 조치를 실행했을 때 예상 점수 상승폭 (1~5 사이 정수). recommendations와 개수 동일.
 icon_suggestions: key_characteristics 각 항목에 대응하는 Material icon 키워드 (영어).
   가능한 키워드: sun, cloud, rain, umbrella, water, tree, park, playground, safety, clean, warning, check, star, heart, fire, snow, wind, leaf, flower, bug, pet, food, medicine, tool, home, car, building, people, baby, sport, music, book, camera, phone, clock, calendar, map, flag, lock, key, light, color, paint, brush, eye, hand, foot, smile, sad, angry, question, info
 

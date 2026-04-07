@@ -9,8 +9,11 @@ class AnalysisResult {
   final String statusColorCode;
   final String summary;
   final List<String> iconSuggestions;
+  final String oneLineDis;
+  final List<int> recommendationScores;
+  final DateTime timestamp;
 
-  const AnalysisResult({
+  AnalysisResult({
     required this.targetName,
     required this.stateScore,
     required this.keyCharacteristics,
@@ -19,7 +22,10 @@ class AnalysisResult {
     required this.statusColorCode,
     required this.summary,
     required this.iconSuggestions,
-  });
+    required this.oneLineDis,
+    required this.recommendationScores,
+    DateTime? timestamp,
+  }) : timestamp = timestamp ?? DateTime.now();
 
   factory AnalysisResult.fromJson(Map<String, dynamic> json) {
     final data = json.containsKey('analysis_result')
@@ -46,8 +52,31 @@ class AnalysisResult {
               ?.map((e) => e.toString())
               .toList() ??
           [],
+      oneLineDis: data['one_liner_dis'] as String? ?? '',
+      recommendationScores:
+          (data['recommendation_scores'] as List<dynamic>?)
+              ?.map((e) => (e as num).toInt())
+              .toList() ??
+          [],
+      timestamp: data['timestamp'] != null
+          ? DateTime.tryParse(data['timestamp'] as String) ?? DateTime.now()
+          : DateTime.now(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'target_name': targetName,
+        'state_score': stateScore,
+        'key_characteristics': keyCharacteristics,
+        'detailed_description': detailedDescription,
+        'recommendations': recommendations,
+        'status_color_code': statusColorCode,
+        'summary': summary,
+        'icon_suggestions': iconSuggestions,
+        'one_liner_dis': oneLineDis,
+        'recommendation_scores': recommendationScores,
+        'timestamp': timestamp.toIso8601String(),
+      };
 
   static AnalysisResult? tryParse(String rawText) {
     var cleaned = rawText.replaceAll(RegExp(r'```\w*\n?'), '').trim();

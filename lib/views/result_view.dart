@@ -1,19 +1,94 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:gal/gal.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/analysis_result.dart';
+import '../services/ad_service.dart';
+import '../services/share_card_content.dart';
 import '../viewmodels/analysis_viewmodel.dart';
 
-class ResultView extends StatelessWidget {
+class ResultView extends StatefulWidget {
   const ResultView({super.key});
+
+  @override
+  State<ResultView> createState() => _ResultViewState();
+}
+
+class _ResultViewState extends State<ResultView> {
+  final _shareCardKey = GlobalKey();
+
+  // 공유 카드 전체를 PNG로 캡처
+  Future<Uint8List?> _captureCard() async {
+    try {
+      // 한 프레임 대기해서 off-screen 위젯이 렌더링되도록 함
+      await Future.delayed(const Duration(milliseconds: 80));
+      final boundary = _shareCardKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) return null;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      return byteData?.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _shareAsImage(BuildContext ctx) async {
+    final bytes = await _captureCard();
+    if (bytes == null) {
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('공유 준비 중 오류가 발생했습니다')),
+        );
+      }
+      return;
+    }
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/aipic_share.png');
+    await file.writeAsBytes(bytes);
+    await Share.shareXFiles([XFile(file.path)], text: '내 방 분석 결과 🏠');
+  }
+
+  Future<void> _saveAsImage(BuildContext ctx) async {
+    final bytes = await _captureCard();
+    if (bytes == null) {
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('저장 준비 중 오류가 발생했습니다')),
+        );
+      }
+      return;
+    }
+    try {
+      await Gal.putImageBytes(bytes, album: 'A.I 방구석팩폭');
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('갤러리에 저장됐습니다 📸')),
+        );
+      }
+    } catch (e) {
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('갤러리 저장에 실패했습니다')),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<AnalysisViewModel>();
     final result = vm.result;
     final theme = Theme.of(context);
+    final screenWidth = MediaQuery.of(context).size.width;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -30,54 +105,399 @@ class ResultView extends StatelessWidget {
           },
         ),
       ),
-      body: result == null
-          ? _StreamingView(text: vm.streamedText)
-          : _ResultBody(result: result),
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // ── 메인 화면 + 하단 배너 ──
+            Column(
+              children: [
+                Expanded(
+                  child: vm.state == AnalysisState.error
+                      ? _ErrorView(
+                          message: vm.errorMessage,
+                          onBack: () {
+                            vm.reset();
+                            Navigator.of(context).pop();
+                          },
+                        )
+                      : result == null
+                          ? _StreamingView(
+                              text: vm.streamedText,
+                              imageBytes: vm.imageBytes,
+                            )
+                          : _ResultBody(
+                              result: result,
+                              onShare: () => _shareAsImage(context),
+                              onSave: () => _saveAsImage(context),
+                            ),
+                ),
+                if (result != null) const BannerAdWidget(),
+              ],
+            ),
+
+            // ── 공유용 카드: 거의 투명하게(opacity 0.01) 렌더링 유지 ──
+            // opacity=0 이면 Flutter가 paint 자체를 skip해서 toImage() 불가.
+            // opacity=0.01 → alpha=3, 육안 식별 불가하지만 paint는 수행됨.
+            if (result != null)
+              IgnorePointer(
+                child: Opacity(
+                  opacity: 0.01,
+                  child: SizedBox(
+                    width: 0,
+                    height: 0,
+                    child: OverflowBox(
+                      minWidth: screenWidth,
+                      maxWidth: screenWidth,
+                      minHeight: 0,
+                      maxHeight: double.infinity,
+                      alignment: Alignment.topLeft,
+                      child: RepaintBoundary(
+                        key: _shareCardKey,
+                        child: ShareCard(result: result),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
 
-// ─── 스트리밍 뷰 ────────────────────────────────────────────
+// ─── 스트리밍 뷰 (스캔 연출 + 단계 + 가짜 진행률 + 드립) ────
 
-class _StreamingView extends StatelessWidget {
+class _StreamingView extends StatefulWidget {
   final String text;
-  const _StreamingView({required this.text});
+  final Uint8List? imageBytes;
+  const _StreamingView({required this.text, this.imageBytes});
+
+  @override
+  State<_StreamingView> createState() => _StreamingViewState();
+}
+
+class _StreamingViewState extends State<_StreamingView>
+    with TickerProviderStateMixin {
+  late AnimationController _spinCtrl;
+  late AnimationController _scanCtrl;
+  late Animation<Color?> _colorAnim;
+
+  static const _steps = [
+    '🧠 AI가 방 구조 분석 중...',
+    '📦 물건 밀집도 계산 중...',
+    '🧹 청결 상태 스캔 중...',
+    '😶 팩폭 문장 생성 중...',
+  ];
+
+  static const _drips = [
+    '"흠… 이건 좀 정리가 필요해 보이는데"',
+    '"잠깐만… 이건 예상보다 심각한데?"',
+    '"AI가 고민 중입니다… 말해도 될지"',
+  ];
+
+  int _stepIndex = 0;
+  int _dripIndex = -1;
+  int _percentStage = 0;
+  late List<int> _fakePercents;
+  Timer? _timer;
+
+  /// 10단계 랜덤 진행률 생성 (항상 올라감, 3초×10 = 30초, 마지막은 95~98)
+  static List<int> _generatePercents() {
+    final rng = math.Random();
+    return [
+      5  + rng.nextInt(6),   // 5~10
+      14 + rng.nextInt(6),   // 14~19
+      24 + rng.nextInt(6),   // 24~29
+      36 + rng.nextInt(6),   // 36~41
+      48 + rng.nextInt(6),   // 48~53
+      60 + rng.nextInt(6),   // 60~65
+      70 + rng.nextInt(6),   // 70~75
+      80 + rng.nextInt(6),   // 80~85
+      89 + rng.nextInt(5),   // 89~93
+      95 + rng.nextInt(4),   // 95~98
+    ];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _fakePercents = _generatePercents();
+    _spinCtrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat();
+    _scanCtrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 3))
+          ..repeat();
+    _colorAnim = TweenSequence<Color?>([
+      TweenSequenceItem(
+          tween: ColorTween(
+              begin: const Color(0xFF6C63FF), end: const Color(0xFFFF6584)),
+          weight: 1),
+      TweenSequenceItem(
+          tween: ColorTween(
+              begin: const Color(0xFFFF6584), end: const Color(0xFF43CFAC)),
+          weight: 1),
+      TweenSequenceItem(
+          tween: ColorTween(
+              begin: const Color(0xFF43CFAC), end: const Color(0xFF6C63FF)),
+          weight: 1),
+    ]).animate(_spinCtrl);
+
+    _timer = Timer.periodic(const Duration(milliseconds: 3000), (_) {
+      if (!mounted) return;
+      setState(() {
+        // 단계 텍스트: 계속 순환
+        _stepIndex = (_stepIndex + 1) % _steps.length;
+        // 드립: 계속 순환
+        if (_dripIndex == -1) {
+          _dripIndex = 0;
+        } else {
+          _dripIndex = (_dripIndex + 1) % _drips.length;
+        }
+        // 진행률: 7단계까지만 올라감 (최대에서 고정)
+        if (_percentStage < _fakePercents.length - 1) {
+          _percentStage++;
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _spinCtrl.dispose();
+    _scanCtrl.dispose();
+    _timer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final percent = _fakePercents[_percentStage];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+
+          // ── 이미지 + 스캔 오버레이 ──
+          if (widget.imageBytes != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: SizedBox(
+                height: 200,
+                width: double.infinity,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.memory(widget.imageBytes!, fit: BoxFit.cover),
+                    // 스캔 라인 애니메이션
+                    AnimatedBuilder(
+                      animation: _scanCtrl,
+                      builder: (_, child) => Positioned(
+                        top: _scanCtrl.value * 200,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          height: 3,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                const Color(0xFF6C63FF).withAlpha(0),
+                                const Color(0xFF6C63FF).withAlpha(200),
+                                const Color(0xFF74B9FF).withAlpha(200),
+                                const Color(0xFF74B9FF).withAlpha(0),
+                              ],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color:
+                                    const Color(0xFF6C63FF).withAlpha(120),
+                                blurRadius: 12,
+                                spreadRadius: 4,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    // 반투명 오버레이
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha(60),
+                      ),
+                    ),
+                    // 중앙 퍼센트
+                    Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 300),
+                            child: Text(
+                              '$percent%',
+                              key: ValueKey(percent),
+                              style: const TextStyle(
+                                fontSize: 48,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                height: 1,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            '분석 진행 중',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          const SizedBox(height: 24),
+
+          // ── 진행바 ──
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOut,
+              height: 8,
+              child: LinearProgressIndicator(
+                value: percent / 100,
+                backgroundColor: theme.colorScheme.primary.withAlpha(30),
+                valueColor: AlwaysStoppedAnimation(_colorAnim.value),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── 단계 텍스트 ──
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 400),
+            transitionBuilder: (child, anim) =>
+                FadeTransition(opacity: anim, child: child),
+            child: Text(
+              _steps[_stepIndex],
+              key: ValueKey(_stepIndex),
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // ── 스텝 인디케이터 점 ──
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(_steps.length, (i) {
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: i == _stepIndex ? 16 : 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: i == _stepIndex
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.primary.withAlpha(60),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              );
+            }),
+          ),
+
+          // ── 한 줄 드립 ──
+          if (_dripIndex >= 0) ...[
+            const SizedBox(height: 20),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 400),
+              child: Container(
+                key: ValueKey(_dripIndex),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withAlpha(20),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.amber.withAlpha(60)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('💬', style: TextStyle(fontSize: 16)),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        _drips[_dripIndex],
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.amber.shade800,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── 에러 뷰 ────────────────────────────────────────────────
+
+class _ErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onBack;
+  const _ErrorView({required this.message, required this.onBack});
+
+  @override
+  Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.symmetric(horizontal: 32),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 24),
-            Text('AI가 분석 중입니다...', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withAlpha(13),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Text(
-                text.isEmpty ? '이미지를 스캔하는 중...' : text,
-                style: TextStyle(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontSize: 12,
-                  fontFamily: 'monospace',
-                ),
-                maxLines: 8,
-                overflow: TextOverflow.ellipsis,
+            const Icon(Icons.error_outline_rounded,
+                size: 64, color: Color(0xFF6C5CE7)),
+            const SizedBox(height: 20),
+            const Text(
+              '분석에 실패했습니다',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message.isNotEmpty ? message : '알 수 없는 오류가 발생했습니다.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 28),
+            ElevatedButton.icon(
+              onPressed: onBack,
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 16),
+              label: const Text('다시 시도하기'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6C5CE7),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 28, vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
               ),
             ),
           ],
@@ -91,7 +511,14 @@ class _StreamingView extends StatelessWidget {
 
 class _ResultBody extends StatelessWidget {
   final AnalysisResult result;
-  const _ResultBody({required this.result});
+  final VoidCallback onShare;
+  final VoidCallback onSave;
+
+  const _ResultBody({
+    required this.result,
+    required this.onShare,
+    required this.onSave,
+  });
 
   Color _parseColor(String hex) {
     try {
@@ -102,36 +529,26 @@ class _ResultBody extends StatelessWidget {
     }
   }
 
+  // 점수 범위별 이모지
+  String _statusEmoji(double score) {
+    if (score >= 0.9) return '🤩';
+    if (score >= 0.8) return '😊';
+    if (score >= 0.6) return '😌';
+    if (score >= 0.4) return '🤔';
+    return '😬';
+  }
+
+  // 위트있는 상태 메시지
   String _statusMessage(double score) {
-    if (score >= 0.8) return '상태가 매우 양호합니다!';
-    if (score >= 0.5) return '조금 더 관리가 필요해요';
-    return '주의가 필요한 상태입니다';
-  }
-
-  IconData _statusIcon(double score) {
-    if (score >= 0.8) return Icons.thumb_up_outlined;
-    if (score >= 0.5) return Icons.warning_amber_rounded;
-    return Icons.error_outline;
-  }
-
-  String _buildShareText(AnalysisResult r) {
-    final score = (r.stateScore * 100).round();
-    final buffer = StringBuffer();
-    buffer.writeln('[AiPic 분석 결과]');
-    buffer.writeln('대상: ${r.targetName}');
-    buffer.writeln('점수: $score / 100');
-    if (r.summary.isNotEmpty) buffer.writeln('요약: ${r.summary}');
-    buffer.writeln('특징: ${r.keyCharacteristics.join(', ')}');
-    buffer.writeln('추천:');
-    for (var i = 0; i < r.recommendations.length; i++) {
-      buffer.writeln('  ${i + 1}. ${r.recommendations[i]}');
-    }
-    return buffer.toString();
+    if (score >= 0.9) return '거의 완벽 — 손댈 데가 없음';
+    if (score >= 0.8) return '상태 좋음 — 딱히 건드릴 게 없는데요';
+    if (score >= 0.6) return '나쁘지 않은데, 조금 아쉽긴 함';
+    if (score >= 0.4) return '슬슬 손 봐야 할 시점';
+    return '지금 당장 조치가 필요합니다';
   }
 
   @override
   Widget build(BuildContext context) {
-    final vm = context.watch<AnalysisViewModel>();
     final theme = Theme.of(context);
     final statusColor = _parseColor(result.statusColorCode);
 
@@ -140,7 +557,7 @@ class _ResultBody extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ── 스코어 게이지 (그라데이션 + 카운트업) ──
+          // ── 스코어 게이지 ──
           Center(
             child: _AnimatedScoreGauge(
                 score: result.stateScore, color: statusColor),
@@ -157,21 +574,22 @@ class _ResultBody extends StatelessWidget {
             ),
           ).animate().fadeIn(delay: 200.ms),
 
-          // ── 상태 메시지 (아이콘 + 텍스트) ──
+          // ── 상태 이모지 + 메시지 ──
           const SizedBox(height: 8),
           Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+            child: Column(
               children: [
-                Icon(_statusIcon(result.stateScore),
-                    color: statusColor, size: 22),
-                const SizedBox(width: 6),
+                Text(
+                  _statusEmoji(result.stateScore),
+                  style: const TextStyle(fontSize: 36),
+                ),
+                const SizedBox(height: 4),
                 Text(
                   _statusMessage(result.stateScore),
                   style: TextStyle(
                     color: statusColor,
                     fontWeight: FontWeight.w600,
-                    fontSize: 16,
+                    fontSize: 15,
                   ),
                 ),
               ],
@@ -182,7 +600,8 @@ class _ResultBody extends StatelessWidget {
           if (result.summary.isNotEmpty) ...[
             const SizedBox(height: 20),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
                 color: theme.colorScheme.primaryContainer.withAlpha(40),
                 borderRadius: BorderRadius.circular(14),
@@ -208,10 +627,40 @@ class _ResultBody extends StatelessWidget {
             ).animate().fadeIn(delay: 350.ms),
           ],
 
-          const SizedBox(height: 24),
+          // ── 한줄 디스 ──
+          if (result.oneLineDis.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.amber.withAlpha(20),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.amber.withAlpha(60)),
+              ),
+              child: Row(
+                children: [
+                  const Text('💬', style: TextStyle(fontSize: 18)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      result.oneLineDis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontStyle: FontStyle.italic,
+                        color: Colors.amber.shade800,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ).animate().fadeIn(delay: 420.ms),
+          ],
 
-          // ── 상세 설명 ──
-          _SectionCard(
+          const SizedBox(height: 20),
+
+          // ── 상세 설명 (접기/펼치기) ──
+          _CollapsibleSectionCard(
             title: '상세 설명',
             icon: Icons.description_outlined,
             child: Text(
@@ -222,87 +671,43 @@ class _ResultBody extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // ── 주요 특징 (2열 그리드) ──
+          // ── 주요 특징 (배지 스타일) ──
           _SectionCard(
             title: '주요 특징',
-            icon: Icons.style_outlined,
-            child: _CharacteristicsGrid(
+            icon: Icons.emoji_events_outlined,
+            child: _BadgeCharacteristics(
               characteristics: result.keyCharacteristics,
-              iconSuggestions: result.iconSuggestions,
             ),
           ).animate().fadeIn(delay: 400.ms).slideY(begin: 0.2, end: 0),
 
           const SizedBox(height: 16),
 
-          // ── 추천 조치 (체크리스트) ──
-          _SectionCard(
-            title: '추천 조치',
-            icon: Icons.task_alt_outlined,
-            trailing: _CompletionBadge(rate: vm.completionRate),
-            child: Column(
-              children: result.recommendations
-                  .asMap()
-                  .entries
-                  .map((e) => _ChecklistItem(
-                        text: e.value,
-                        checked: vm.checkedRecommendations.length > e.key
-                            ? vm.checkedRecommendations[e.key]
-                            : false,
-                        onChanged: () => vm.toggleRecommendation(e.key),
-                      ))
-                  .toList(),
-            ),
-          ).animate().fadeIn(delay: 500.ms).slideY(begin: 0.2, end: 0),
+          // ── 추천 조치 + AD (광고 시청 후 잠금 해제) ──
+          _AdGatedRecommendationsCard(result: result)
+              .animate()
+              .fadeIn(delay: 500.ms)
+              .slideY(begin: 0.2, end: 0),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 32),
 
           // ── 하단 액션 버튼 ──
           Row(
             children: [
               Expanded(
-                child: _ActionButton(
-                  icon: Icons.share_outlined,
-                  label: '공유하기',
-                  onTap: () {
-                    Clipboard.setData(
-                        ClipboardData(text: _buildShareText(result)));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('분석 결과가 클립보드에 복사되었습니다'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  },
+                flex: 3,
+                child: _PrimaryShareButton(
+                  icon: Icons.share_rounded,
+                  label: '이 정도면 자랑 가능?',
+                  onTap: onShare,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 14),
               Expanded(
-                child: _ActionButton(
-                  icon: Icons.save_outlined,
-                  label: '저장하기',
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('준비 중입니다'),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _ActionButton(
-                  icon: Icons.history_outlined,
-                  label: '기록 보기',
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('준비 중입니다'),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  },
+                flex: 3,
+                child: _SecondaryButton(
+                  icon: Icons.save_alt_rounded,
+                  label: '결과 저장해두기',
+                  onTap: onSave,
                 ),
               ),
             ],
@@ -415,7 +820,6 @@ class _GradientGaugePainter extends CustomPainter {
     const startAngle = math.pi * 0.75;
     const sweepFull = math.pi * 1.5;
 
-    // 배경 트랙
     final trackPaint = Paint()
       ..color = color.withAlpha(38)
       ..style = PaintingStyle.stroke
@@ -429,17 +833,16 @@ class _GradientGaugePainter extends CustomPainter {
       trackPaint,
     );
 
-    // 그라데이션 값 아크
     if (score > 0) {
       final rect = Rect.fromCircle(center: center, radius: radius);
       final gradient = SweepGradient(
         startAngle: 0,
         endAngle: sweepFull,
         colors: const [
-          Color(0xFFF44336), // 빨강
-          Color(0xFFFF9800), // 주황
-          Color(0xFFFFEB3B), // 노랑
-          Color(0xFF4CAF50), // 초록
+          Color(0xFFF44336),
+          Color(0xFFFF9800),
+          Color(0xFFFFEB3B),
+          Color(0xFF4CAF50),
         ],
         stops: const [0.0, 0.33, 0.66, 1.0],
         transform: GradientRotation(startAngle),
@@ -466,116 +869,46 @@ class _GradientGaugePainter extends CustomPainter {
       old.score != score || old.color != color;
 }
 
-// ─── 주요 특징 2열 그리드 ───────────────────────────────────
+// ─── 배지 스타일 특징 ────────────────────────────────────────
 
-class _CharacteristicsGrid extends StatelessWidget {
+class _BadgeCharacteristics extends StatelessWidget {
   final List<String> characteristics;
-  final List<String> iconSuggestions;
 
-  const _CharacteristicsGrid({
-    required this.characteristics,
-    required this.iconSuggestions,
-  });
-
-  static const _iconMap = <String, IconData>{
-    'sun': Icons.wb_sunny_outlined,
-    'cloud': Icons.cloud_outlined,
-    'rain': Icons.water_drop_outlined,
-    'umbrella': Icons.beach_access_outlined,
-    'water': Icons.water_outlined,
-    'tree': Icons.park_outlined,
-    'park': Icons.park_outlined,
-    'playground': Icons.toys_outlined,
-    'safety': Icons.health_and_safety_outlined,
-    'clean': Icons.cleaning_services_outlined,
-    'warning': Icons.warning_amber_outlined,
-    'check': Icons.check_circle_outline,
-    'star': Icons.star_outline,
-    'heart': Icons.favorite_outline,
-    'fire': Icons.local_fire_department_outlined,
-    'snow': Icons.ac_unit_outlined,
-    'wind': Icons.air_outlined,
-    'leaf': Icons.eco_outlined,
-    'flower': Icons.local_florist_outlined,
-    'bug': Icons.bug_report_outlined,
-    'pet': Icons.pets_outlined,
-    'food': Icons.restaurant_outlined,
-    'medicine': Icons.medical_services_outlined,
-    'tool': Icons.build_outlined,
-    'home': Icons.home_outlined,
-    'car': Icons.directions_car_outlined,
-    'building': Icons.apartment_outlined,
-    'people': Icons.people_outlined,
-    'baby': Icons.child_care_outlined,
-    'sport': Icons.sports_soccer_outlined,
-    'music': Icons.music_note_outlined,
-    'book': Icons.menu_book_outlined,
-    'camera': Icons.camera_alt_outlined,
-    'phone': Icons.phone_android_outlined,
-    'clock': Icons.access_time_outlined,
-    'calendar': Icons.calendar_today_outlined,
-    'map': Icons.map_outlined,
-    'flag': Icons.flag_outlined,
-    'lock': Icons.lock_outlined,
-    'key': Icons.key_outlined,
-    'light': Icons.lightbulb_outline,
-    'color': Icons.palette_outlined,
-    'paint': Icons.brush_outlined,
-    'brush': Icons.brush_outlined,
-    'eye': Icons.visibility_outlined,
-    'hand': Icons.pan_tool_outlined,
-    'smile': Icons.sentiment_satisfied_outlined,
-    'sad': Icons.sentiment_dissatisfied_outlined,
-    'angry': Icons.sentiment_very_dissatisfied_outlined,
-    'question': Icons.help_outline,
-    'info': Icons.info_outline,
-  };
-
-  IconData _getIcon(int index) {
-    if (index >= iconSuggestions.length) return Icons.label_outlined;
-    final keyword = iconSuggestions[index].toLowerCase();
-    // 정확히 매칭
-    if (_iconMap.containsKey(keyword)) return _iconMap[keyword]!;
-    // 부분 매칭
-    for (final entry in _iconMap.entries) {
-      if (keyword.contains(entry.key) || entry.key.contains(keyword)) {
-        return entry.value;
-      }
-    }
-    return Icons.label_outlined;
-  }
+  const _BadgeCharacteristics({required this.characteristics});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return GridView.count(
-      crossAxisCount: 2,
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      childAspectRatio: 2.8,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: characteristics
-          .asMap()
-          .entries
-          .map((e) => Container(
+          .map((c) => Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
+                  gradient: LinearGradient(
+                    colors: [
+                      theme.colorScheme.primaryContainer,
+                      theme.colorScheme.primaryContainer.withAlpha(180),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withAlpha(40),
+                  ),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(_getIcon(e.key),
-                        size: 20, color: theme.colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        e.value,
-                        style: const TextStyle(fontSize: 13),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                    const Text('🏅', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 6),
+                    Text(
+                      c,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onPrimaryContainer,
                       ),
                     ),
                   ],
@@ -586,15 +919,17 @@ class _CharacteristicsGrid extends StatelessWidget {
   }
 }
 
-// ─── 체크리스트 아이템 ──────────────────────────────────────
+// ─── 업그레이드 체크리스트 아이템 ────────────────────────────
 
-class _ChecklistItem extends StatelessWidget {
+class _UpgradeChecklistItem extends StatelessWidget {
   final String text;
+  final int scoreBoost;
   final bool checked;
   final VoidCallback onChanged;
 
-  const _ChecklistItem({
+  const _UpgradeChecklistItem({
     required this.text,
+    required this.scoreBoost,
     required this.checked,
     required this.onChanged,
   });
@@ -614,9 +949,8 @@ class _ChecklistItem extends StatelessWidget {
               width: 24,
               height: 24,
               decoration: BoxDecoration(
-                color: checked
-                    ? theme.colorScheme.primary
-                    : Colors.transparent,
+                color:
+                    checked ? theme.colorScheme.primary : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: checked
@@ -638,9 +972,32 @@ class _ChecklistItem extends StatelessWidget {
                   color: checked
                       ? theme.colorScheme.onSurfaceVariant
                       : theme.colorScheme.onSurface,
-                  decoration:
-                      checked ? TextDecoration.lineThrough : TextDecoration.none,
+                  decoration: checked
+                      ? TextDecoration.lineThrough
+                      : TextDecoration.none,
                   decorationColor: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // 점수 상승 배지
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: checked
+                    ? theme.colorScheme.surfaceContainerHighest
+                    : const Color(0xFF4CAF50).withAlpha(30),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '+$scoreBoost 점',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: checked
+                      ? theme.colorScheme.onSurfaceVariant
+                      : const Color(0xFF2E7D32),
                 ),
               ),
             ),
@@ -689,13 +1046,11 @@ class _SectionCard extends StatelessWidget {
   final String title;
   final IconData icon;
   final Widget child;
-  final Widget? trailing;
 
   const _SectionCard({
     required this.title,
     required this.icon,
     required this.child,
-    this.trailing,
   });
 
   @override
@@ -728,10 +1083,6 @@ class _SectionCard extends StatelessWidget {
                   color: theme.colorScheme.primary,
                 ),
               ),
-              if (trailing != null) ...[
-                const Spacer(),
-                trailing!,
-              ],
             ],
           ),
           const SizedBox(height: 12),
@@ -742,41 +1093,376 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-// ─── 하단 액션 버튼 ─────────────────────────────────────────
+// ─── 접기/펼치기 섹션 카드 ───────────────────────────────────
 
-class _ActionButton extends StatelessWidget {
+class _CollapsibleSectionCard extends StatefulWidget {
+  final String title;
+  final IconData icon;
+  final Widget child;
+
+  const _CollapsibleSectionCard({
+    required this.title,
+    required this.icon,
+    required this.child,
+  });
+
+  @override
+  State<_CollapsibleSectionCard> createState() =>
+      _CollapsibleSectionCardState();
+}
+
+class _CollapsibleSectionCardState extends State<_CollapsibleSectionCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(13),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: () => setState(() => _expanded = !_expanded),
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(widget.icon,
+                      size: 18, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const Spacer(),
+                  AnimatedRotation(
+                    turns: _expanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 250),
+                    child: Icon(Icons.keyboard_arrow_down_rounded,
+                        color: theme.colorScheme.primary),
+                  ),
+                ],
+              ),
+              AnimatedCrossFade(
+                firstChild: const SizedBox.shrink(),
+                secondChild: Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: widget.child,
+                ),
+                crossFadeState: _expanded
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 300),
+              ),
+              if (!_expanded)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '자세히 보기',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── 추천 조치 + AD (광고 게이트) ───────────────────────────
+
+class _AdGatedRecommendationsCard extends StatefulWidget {
+  final AnalysisResult result;
+  const _AdGatedRecommendationsCard({required this.result});
+
+  @override
+  State<_AdGatedRecommendationsCard> createState() =>
+      _AdGatedRecommendationsCardState();
+}
+
+class _AdGatedRecommendationsCardState
+    extends State<_AdGatedRecommendationsCard> {
+  bool _unlocked = false;
+  bool _loading = false;
+
+  void _unlock() {
+    if (_unlocked || _loading) return;
+    setState(() => _loading = true);
+    AdService().showRewardedAd(
+      onComplete: () {
+        if (mounted) setState(() { _unlocked = true; _loading = false; });
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final vm = context.watch<AnalysisViewModel>();
+    final result = widget.result;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(13),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+             
+              const SizedBox(width: 8),
+              Text(
+                '🔓 히든 결과 해제',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              if (_unlocked) ...[
+                const Spacer(),
+                _CompletionBadge(rate: vm.completionRate),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (!_unlocked)
+            InkWell(
+              onTap: _loading ? null : _unlock,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withAlpha(40),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: theme.colorScheme.primary.withAlpha(30)),
+                ),
+                child: _loading
+                    ? const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : Column(
+                        children: [
+                          const Text('📺',
+                              style: TextStyle(fontSize: 24)),
+                          const SizedBox(height: 6),
+                          Text(
+                            '이 정도로 만족할 건 아니죠?',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '간단히 보고 잠금 해제',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            )
+          else
+            Column(
+              children: result.recommendations
+                  .asMap()
+                  .entries
+                  .map((e) => _UpgradeChecklistItem(
+                        text: e.value,
+                        scoreBoost:
+                            e.key < result.recommendationScores.length
+                                ? result.recommendationScores[e.key]
+                                : 3,
+                        checked:
+                            vm.checkedRecommendations.length > e.key
+                                ? vm.checkedRecommendations[e.key]
+                                : false,
+                        onChanged: () => vm.toggleRecommendation(e.key),
+                      ))
+                  .toList(),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── 메인 공유 버튼 (그라데이션) ────────────────────────────
+
+class _PrimaryShareButton extends StatefulWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
 
-  const _ActionButton({
+  const _PrimaryShareButton({
     required this.icon,
     required this.label,
     required this.onTap,
   });
 
   @override
+  State<_PrimaryShareButton> createState() => _PrimaryShareButtonState();
+}
+
+class _PrimaryShareButtonState extends State<_PrimaryShareButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTap: () {
+        HapticFeedback.lightImpact();
+        widget.onTap();
+      },
+      child: AnimatedScale(
+        scale: _pressed ? 0.95 : 1.0,
+        duration: const Duration(milliseconds: 100),
+        child: Container(
+          height: 54,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF6C5CE7), Color(0xFF74B9FF)],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6C5CE7).withAlpha(70),
+                blurRadius: 12,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(widget.icon, size: 20, color: Colors.white),
+              const SizedBox(width: 8),
+              Text(
+                widget.label,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── 보조 저장 버튼 (outline + 연한 배경) ───────────────────
+
+class _SecondaryButton extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SecondaryButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  State<_SecondaryButton> createState() => _SecondaryButtonState();
+}
+
+class _SecondaryButtonState extends State<_SecondaryButton> {
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return OutlinedButton(
-      onPressed: onTap,
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 22, color: theme.colorScheme.primary),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: theme.colorScheme.onSurfaceVariant,
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _pressed ? 0.95 : 1.0,
+        duration: const Duration(milliseconds: 100),
+        child: Container(
+          height: 54,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.primaryContainer.withAlpha(50),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: theme.colorScheme.primary.withAlpha(80),
+              width: 1.5,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(10),
+                blurRadius: 6,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
-        ],
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(widget.icon,
+                  size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

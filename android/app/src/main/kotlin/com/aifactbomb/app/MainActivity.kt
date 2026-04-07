@@ -1,4 +1,4 @@
-package com.aipic.aipic
+package com.aifactbomb.app
 
 import io.flutter.embedding.android.FlutterActivity
 

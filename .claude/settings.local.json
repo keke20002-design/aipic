@@ -9,7 +9,9 @@
       "Bash(flutter build:*)",
       "Bash(wmic logicaldisk:*)",
       "Bash(powershell -Command \"\\(Get-ChildItem ''C:\\\\Users\\\\test\\\\StudioProjects\\\\aipic\\\\build'' -Recurse | Measure-Object -Property Length -Sum\\).Sum / 1MB\")",
-      "Bash(flutter clean:*)"
+      "Bash(flutter clean:*)",
+      "Bash(dart run:*)",
+      "Bash(find:*)"
     ]
   }
 }

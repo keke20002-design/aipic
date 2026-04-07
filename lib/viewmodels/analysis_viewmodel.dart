@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../models/analysis_result.dart';
 import '../services/gemini_service.dart';
+import '../services/history_service.dart';
 
 enum AnalysisState { idle, loading, streaming, done, error }
 
@@ -59,11 +61,13 @@ class AnalysisViewModel extends ChangeNotifier {
       notifyListeners();
 
       final mimeType = _getMimeType(_selectedImage!.name);
-      await for (final chunk
-          in _service.analyzeImageStream(_imageBytes!, mimeType)) {
-        _streamedText += chunk;
-        notifyListeners();
-      }
+      await (() async {
+        await for (final chunk
+            in _service.analyzeImageStream(_imageBytes!, mimeType)) {
+          _streamedText += chunk;
+          notifyListeners();
+        }
+      })().timeout(const Duration(seconds: 30));
 
       final parsed = AnalysisResult.tryParse(_streamedText);
       if (parsed != null) {
@@ -71,13 +75,22 @@ class AnalysisViewModel extends ChangeNotifier {
         _checkedRecommendations =
             List.filled(parsed.recommendations.length, false);
         _state = AnalysisState.done;
+        await HistoryService.save(parsed);
       } else {
         debugPrint('파싱 실패 원본: $_streamedText');
         _errorMessage = '분석 결과를 파싱할 수 없습니다. 다시 시도해주세요.';
         _state = AnalysisState.error;
       }
+    } on TimeoutException {
+      _errorMessage = '분석 시간이 너무 오래 걸립니다.\n잠시 후 다시 시도해주세요.';
+      _state = AnalysisState.error;
     } catch (e) {
-      _errorMessage = e.toString();
+      final msg = e.toString();
+      if (msg.contains('high demand') || msg.contains('scaling')) {
+        _errorMessage = '잠시 후에 다시 시도해보세요. A.I 서버가 안정화되면 다시 서비스를 이용할 수 있습니다';
+      } else {
+        _errorMessage = msg;
+      }
       _state = AnalysisState.error;
     }
     notifyListeners();
