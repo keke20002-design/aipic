@@ -13,14 +13,18 @@ class AnalysisViewModel extends ChangeNotifier {
   AnalysisState _state = AnalysisState.idle;
   String _streamedText = '';
   AnalysisResult? _result;
+  AnalysisResult? _pendingResult;
+  bool _awaitingAdBeforeResult = false;
   String _errorMessage = '';
   XFile? _selectedImage;
   Uint8List? _imageBytes;
   List<bool> _checkedRecommendations = [];
+  String _languageCode = 'ko';
 
   AnalysisState get state => _state;
   String get streamedText => _streamedText;
   AnalysisResult? get result => _result;
+  bool get awaitingAdBeforeResult => _awaitingAdBeforeResult;
   String get errorMessage => _errorMessage;
   XFile? get selectedImage => _selectedImage;
   Uint8List? get imageBytes => _imageBytes;
@@ -46,7 +50,8 @@ class AnalysisViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> analyzeImage() async {
+  Future<void> analyzeImage({String? languageCode}) async {
+    if (languageCode != null) _languageCode = languageCode;
     if (_selectedImage == null || _imageBytes == null) return;
 
     _state = AnalysisState.loading;
@@ -56,43 +61,71 @@ class AnalysisViewModel extends ChangeNotifier {
     _checkedRecommendations = [];
     notifyListeners();
 
-    try {
-      _state = AnalysisState.streaming;
-      notifyListeners();
+    const maxRetries = 3;
+    final mimeType = _getMimeType(_selectedImage!.name);
 
-      final mimeType = _getMimeType(_selectedImage!.name);
-      await (() async {
-        await for (final chunk
-            in _service.analyzeImageStream(_imageBytes!, mimeType)) {
-          _streamedText += chunk;
+    for (var attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        _state = AnalysisState.streaming;
+        _streamedText = '';
+        notifyListeners();
+
+        await (() async {
+          await for (final chunk in _service.analyzeImageStream(
+              _imageBytes!, mimeType, languageCode: _languageCode)) {
+            _streamedText += chunk;
+            notifyListeners();
+          }
+        })().timeout(const Duration(seconds: 60));
+
+        final parsed = AnalysisResult.tryParse(_streamedText);
+        if (parsed != null) {
+          _pendingResult = parsed;
+          _checkedRecommendations =
+              List.filled(parsed.recommendations.length, false);
+          _state = AnalysisState.done;
+          _awaitingAdBeforeResult = true;
+          await HistoryService.save(parsed);
           notifyListeners();
+          return;
+        } else {
+          debugPrint('파싱 실패 원본 (시도 $attempt): $_streamedText');
+          if (attempt == maxRetries) {
+            _errorMessage = '분석 결과를 파싱할 수 없습니다. 다시 시도해주세요.';
+            _state = AnalysisState.error;
+          }
         }
-      })().timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        debugPrint('타임아웃 (시도 $attempt)');
+        if (attempt == maxRetries) {
+          _errorMessage = '분석 시간이 너무 오래 걸립니다.\n잠시 후 다시 시도해주세요.';
+          _state = AnalysisState.error;
+        }
+      } catch (e) {
+        debugPrint('오류 (시도 $attempt): $e');
+        if (attempt == maxRetries) {
+          final msg = e.toString();
+          if (msg.contains('high demand') || msg.contains('scaling')) {
+            _errorMessage = '잠시 후에 다시 시도해보세요. A.I 서버가 안정화되면 다시 서비스를 이용할 수 있습니다';
+          } else {
+            _errorMessage = msg;
+          }
+          _state = AnalysisState.error;
+        }
+      }
 
-      final parsed = AnalysisResult.tryParse(_streamedText);
-      if (parsed != null) {
-        _result = parsed;
-        _checkedRecommendations =
-            List.filled(parsed.recommendations.length, false);
-        _state = AnalysisState.done;
-        await HistoryService.save(parsed);
-      } else {
-        debugPrint('파싱 실패 원본: $_streamedText');
-        _errorMessage = '분석 결과를 파싱할 수 없습니다. 다시 시도해주세요.';
-        _state = AnalysisState.error;
+      if (_state != AnalysisState.done && attempt < maxRetries) {
+        await Future.delayed(const Duration(seconds: 1));
       }
-    } on TimeoutException {
-      _errorMessage = '분석 시간이 너무 오래 걸립니다.\n잠시 후 다시 시도해주세요.';
-      _state = AnalysisState.error;
-    } catch (e) {
-      final msg = e.toString();
-      if (msg.contains('high demand') || msg.contains('scaling')) {
-        _errorMessage = '잠시 후에 다시 시도해보세요. A.I 서버가 안정화되면 다시 서비스를 이용할 수 있습니다';
-      } else {
-        _errorMessage = msg;
-      }
-      _state = AnalysisState.error;
     }
+    notifyListeners();
+  }
+
+  void revealResult() {
+    if (_pendingResult == null) return;
+    _result = _pendingResult;
+    _pendingResult = null;
+    _awaitingAdBeforeResult = false;
     notifyListeners();
   }
 
@@ -114,6 +147,8 @@ class AnalysisViewModel extends ChangeNotifier {
     _state = AnalysisState.idle;
     _streamedText = '';
     _result = null;
+    _pendingResult = null;
+    _awaitingAdBeforeResult = false;
     _errorMessage = '';
     _selectedImage = null;
     _imageBytes = null;

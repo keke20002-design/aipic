@@ -1,12 +1,15 @@
 // 공유용 전체 결과 카드 (비스크롤, 화면 밖 렌더링)
 // result_view.dart에서 import해서 사용
 
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../l10n/app_localizations.dart';
 import '../models/analysis_result.dart';
 
 class ShareCard extends StatelessWidget {
   final AnalysisResult result;
-  const ShareCard({super.key, required this.result});
+  final Uint8List? imageBytes;
+  const ShareCard({super.key, required this.result, this.imageBytes});
 
   Color _parseColor(String hex) {
     try {
@@ -25,36 +28,49 @@ class ShareCard extends StatelessWidget {
     return '😬';
   }
 
-  String _statusMessage(double score) {
-    if (score >= 0.9) return '거의 완벽 — 손댈 데가 없음';
-    if (score >= 0.8) return '상태 좋음 — 딱히 건드릴 게 없는데요';
-    if (score >= 0.6) return '나쁘지 않은데, 조금 아쉽긴 함';
-    if (score >= 0.4) return '슬슬 손 봐야 할 시점';
-    return '지금 당장 조치가 필요합니다';
-  }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final statusColor = _parseColor(result.statusColorCode);
     final score = (result.stateScore * 100).round();
 
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(28, 32, 28, 28),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 앱 브랜딩
+          // 분석한 사진
+          if (imageBytes != null)
+            ClipRRect(
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(0),
+                topRight: Radius.circular(0),
+              ),
+              child: Image.memory(
+                imageBytes!,
+                height: 200,
+                width: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 20, 28, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(Icons.auto_awesome,
                   color: Color(0xFF6C5CE7), size: 16),
               const SizedBox(width: 6),
-              const Text(
-                'A.I 방구석팩폭',
-                style: TextStyle(
+              Text(
+                l10n.appBrandName,
+                style: const TextStyle(
                   color: Color(0xFF6C5CE7),
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
@@ -63,7 +79,7 @@ class ShareCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
           // 점수 + 이모지
           Center(
@@ -86,7 +102,7 @@ class ShareCard extends StatelessWidget {
                         fontSize: 14, color: statusColor.withAlpha(180))),
                 const SizedBox(height: 6),
                 Text(
-                  _statusMessage(result.stateScore),
+                  l10n.statusMessage(result.stateScore),
                   style: TextStyle(
                     color: statusColor,
                     fontWeight: FontWeight.w600,
@@ -137,25 +153,71 @@ class ShareCard extends StatelessWidget {
           if (result.oneLineDis.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.amber.withAlpha(20),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.amber.withAlpha(60)),
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.deepOrange.withAlpha(120),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.orange.withAlpha(50),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('💬', style: TextStyle(fontSize: 14)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      result.oneLineDis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                        color: Colors.amber.shade800,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                    decoration: const BoxDecoration(
+                      color: Colors.deepOrange,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        bottomRight: Radius.circular(10),
                       ),
+                    ),
+                    child: const Text(
+                      '🔥 AI FACT',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          result.stateScore >= 0.8
+                              ? '😏'
+                              : result.stateScore >= 0.5
+                                  ? '😬'
+                                  : '💀',
+                          style: const TextStyle(fontSize: 16),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            result.oneLineDis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF4A2800),
+                              height: 1.6,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -165,10 +227,9 @@ class ShareCard extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // 주요 특징
           if (result.keyCharacteristics.isNotEmpty) ...[
-            const Text('주요 특징',
-                style: TextStyle(
+            Text(l10n.keyFeatures,
+                style: const TextStyle(
                     fontWeight: FontWeight.bold, fontSize: 13)),
             const SizedBox(height: 8),
             Wrap(
@@ -198,10 +259,9 @@ class ShareCard extends StatelessWidget {
             const SizedBox(height: 16),
           ],
 
-          // 추천 조치
           if (result.recommendations.isNotEmpty) ...[
-            const Text('추천 조치',
-                style: TextStyle(
+            Text(l10n.recommendationsLabel,
+                style: const TextStyle(
                     fontWeight: FontWeight.bold, fontSize: 13)),
             const SizedBox(height: 8),
             ...result.recommendations
@@ -231,7 +291,7 @@ class ShareCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        '+$boost점',
+                        l10n.scoreBoostLabel(boost),
                         style: const TextStyle(
                           fontSize: 10,
                           color: Color(0xFF2E7D32),
@@ -250,10 +310,13 @@ class ShareCard extends StatelessWidget {
           // 푸터
           const Divider(),
           const SizedBox(height: 8),
-          const Center(
+          Center(
             child: Text(
-              'A.I 방구석팩폭으로 나도 분석해보기 📸',
-              style: TextStyle(fontSize: 11, color: Colors.grey),
+              l10n.shareFooter,
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+          ),
+              ],
             ),
           ),
         ],

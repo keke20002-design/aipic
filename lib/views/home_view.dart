@@ -4,12 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import '../l10n/app_localizations.dart';
+import '../main.dart';
 import '../services/ad_service.dart';
 import '../viewmodels/analysis_viewmodel.dart';
 import 'history_view.dart';
 import 'result_view.dart';
 
-// 앱 포인트 컬러
 const _kPurple = Color(0xFF6C5CE7);
 const _kSky = Color(0xFF74B9FF);
 
@@ -33,6 +34,7 @@ class HomeView extends StatelessWidget {
   }
 
   void _showPickerSheet(BuildContext context, AnalysisViewModel vm) {
+    final l10n = AppLocalizations.of(context);
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -54,9 +56,8 @@ class HomeView extends StatelessWidget {
               ),
               const SizedBox(height: 20),
               ListTile(
-                leading:
-                    const Icon(Icons.camera_alt_outlined, color: _kPurple),
-                title: const Text('카메라로 촬영'),
+                leading: const Icon(Icons.camera_alt_outlined, color: _kPurple),
+                title: Text(l10n.cameraCapture),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
                 onTap: () {
@@ -66,9 +67,8 @@ class HomeView extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               ListTile(
-                leading: const Icon(Icons.photo_library_outlined,
-                    color: _kPurple),
-                title: const Text('갤러리에서 선택'),
+                leading: const Icon(Icons.photo_library_outlined, color: _kPurple),
+                title: Text(l10n.gallerySelect),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
                 onTap: () {
@@ -86,6 +86,8 @@ class HomeView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<AnalysisViewModel>();
+    final l10n = AppLocalizations.of(context);
+    final locale = Localizations.localeOf(context);
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -95,11 +97,7 @@ class HomeView extends StatelessWidget {
         child: BannerAdWidget(),
       ),
       appBar: AppBar(
-        title: Image.asset(
-          'assets/title.png',
-          height: 55,
-          fit: BoxFit.contain,
-        ),
+        title: _LocaleTitle(),
         centerTitle: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -108,9 +106,9 @@ class HomeView extends StatelessWidget {
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const HistoryView()),
             ),
-            child: const Text(
-              '기록 보기',
-              style: TextStyle(
+            child: Text(
+              l10n.historyView,
+              style: const TextStyle(
                 color: _kPurple,
                 fontWeight: FontWeight.w600,
                 fontSize: 14,
@@ -119,7 +117,6 @@ class HomeView extends StatelessWidget {
           ),
         ],
       ),
-      // ── 그라데이션 배경 ──
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -132,27 +129,23 @@ class HomeView extends StatelessWidget {
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: SingleChildScrollView(
-              child: Column(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ── 사진 카드 ──
-                SizedBox(
-                  height: 220,
+                Expanded(
                   child: _ImageCard(
                     imageBytes: vm.imageBytes,
                     onTap: vm.isLoading
                         ? null
                         : () => _showPickerSheet(context, vm),
-                  ),
-                ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.08, end: 0),
+                  ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.08, end: 0),
+                ),
 
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
 
-                // ── 감성 한 줄 멘트 ──
                 Center(
                   child: Text(
-                    '거짓말 못하는 렌즈',
+                    l10n.tagline,
                     style: TextStyle(
                       fontSize: 12,
                       color: _kPurple.withAlpha(160),
@@ -162,20 +155,18 @@ class HomeView extends StatelessWidget {
                   ),
                 ).animate().fadeIn(delay: 300.ms),
 
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
 
-                // ── 카메라(메인) + 갤러리(보조) ──
                 Row(
                   children: [
                     Expanded(
                       flex: 3,
                       child: _PrimaryPickButton(
                         icon: Icons.camera_alt_rounded,
-                        label: '지금 바로 찍기',
+                        label: l10n.takeNow,
                         onTap: vm.isLoading
                             ? null
-                            : () =>
-                                _pickImage(context, ImageSource.camera, vm),
+                            : () => _pickImage(context, ImageSource.camera, vm),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -183,38 +174,27 @@ class HomeView extends StatelessWidget {
                       flex: 2,
                       child: _SecondaryPickButton(
                         icon: Icons.photo_library_outlined,
-                        label: '인생샷 고르기',
+                        label: l10n.pickFromGallery,
                         onTap: vm.isLoading
                             ? null
-                            : () =>
-                                _pickImage(context, ImageSource.gallery, vm),
+                            : () => _pickImage(context, ImageSource.gallery, vm),
                       ),
                     ),
                   ],
                 ).animate().fadeIn(delay: 150.ms),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
 
-                // ── 기능 소개 카드 ──
-                if (vm.selectedImage == null)
-                  _FeatureCards()
-                      .animate()
-                      .fadeIn(delay: 220.ms)
-                      .slideY(begin: 0.1, end: 0),
-
-                // ── 티저 + 예시 카드 (항상 표시) ──
-                const SizedBox(height: 12),
                 const _PreviewSection()
                     .animate()
                     .fadeIn(delay: 300.ms)
                     .slideY(begin: 0.1, end: 0),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 10),
 
-                // ── 에러 메시지 ──
                 if (vm.state == AnalysisState.error)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
                       vm.errorMessage,
                       style: const TextStyle(color: Colors.red, fontSize: 13),
@@ -222,31 +202,25 @@ class HomeView extends StatelessWidget {
                     ),
                   ),
 
-                // ── 분석 시작 버튼 ──
                 _GradientAnalyzeButton(
                   enabled: vm.selectedImage != null && !vm.isLoading,
                   isLoading: vm.isLoading,
                   onTap: () {
-                    AdService().maybeShowRewardedAd(
-                      onComplete: () {
-                        if (!context.mounted) return;
-                        vm.analyzeImage();
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => ChangeNotifierProvider.value(
-                              value: vm,
-                              child: const ResultView(),
-                            ),
-                          ),
-                        );
-                      },
+                    if (!context.mounted) return;
+                    vm.analyzeImage(languageCode: locale.languageCode);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ChangeNotifierProvider.value(
+                          value: vm,
+                          child: const ResultView(),
+                        ),
+                      ),
                     );
                   },
                 ),
 
                 const SizedBox(height: 8),
               ],
-            ),
             ),
           ),
         ),
@@ -264,6 +238,8 @@ class _ImageCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+
     if (imageBytes != null) {
       return GestureDetector(
         onTap: onTap,
@@ -312,7 +288,6 @@ class _ImageCard extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // 큰 아이콘 (강조)
             Container(
               width: 80,
               height: 80,
@@ -338,21 +313,25 @@ class _ImageCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 14),
-            const Text(
-              '팩폭주의 : 사진은 거짓말 안합니다',
-              style: TextStyle(
+            Text(
+              l10n.warningTitle,
+              style: const TextStyle(
                 color: _kPurple,
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
               ),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 4),
             Text(
-              '지금 바로 스캔 시작',
+              l10n.scanStart,
               style: TextStyle(
                 color: Colors.grey.shade500,
                 fontSize: 12,
               ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -458,74 +437,23 @@ class _SecondaryPickButton extends StatelessWidget {
   }
 }
 
-
-// ─── 기능 소개 카드 ──────────────────────────────────────────
-
-class _FeatureCards extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final items = [
-      ('✨', '사진 한 장이면 끝', const Color(0xFFEDE7F6)),
-      ('🏆', '점수로 증명하는 내 상태', const Color(0xFFE3F2FD)),
-      ('📤', '친구한테 바로 자랑', const Color(0xFFE8F5E9)),
-    ];
-
-    return Row(
-      children: items
-          .map((item) => Expanded(
-                child: Container(
-                  margin: EdgeInsets.only(
-                    right: item == items.last ? 0 : 8,
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 12, horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: item.$3,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(item.$1, style: const TextStyle(fontSize: 20)),
-                      const SizedBox(height: 5),
-                      Text(
-                        item.$2,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
-              ))
-          .toList(),
-    );
-  }
-}
-
 // ─── 티저 + 예시 카드 ────────────────────────────────────────
 
 class _PreviewSection extends StatelessWidget {
   const _PreviewSection();
 
-  static const _quotes = [
-    '"역시 완벽하면 정 없지. 저 침대의 역동적인 주름이 이 방의 유일한 예술적 포인트라고 봐"',
-    '"이 정도면 5성급이지. 체크아웃 시간 없는 거 빼고는 호텔이랑 다를 게 뭐야?"',
-    '"여백의 미가 아주 태평양 수준인데? 덕분에 내 마음이 아주 평온해지다 못해 잠이 쏟아지려고 해"',
-    '"미니멀리즘의 정석이네. 혹시 인테리어 컨셉이 \'수도원\'이야?"',
-  ];
-
   @override
   Widget build(BuildContext context) {
-    final quote = _quotes[Random().nextInt(_quotes.length)];
+    final l10n = AppLocalizations.of(context);
+    final quotes = l10n.previewQuotes;
+    final quote = quotes[Random().nextInt(quotes.length)];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ── 티저 한 줄 ──
         Center(
           child: Text(
-            '이거 분석 안 하면 모른다',
+            l10n.teaser,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w700,
@@ -537,7 +465,6 @@ class _PreviewSection extends StatelessWidget {
 
         const SizedBox(height: 12),
 
-        // ── 예시 결과 카드 ──
         Container(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           decoration: BoxDecoration(
@@ -555,13 +482,12 @@ class _PreviewSection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 헤더
               Row(
                 children: [
                   const Text('📊', style: TextStyle(fontSize: 15)),
                   const SizedBox(width: 6),
                   Text(
-                    '분석 예시',
+                    l10n.analysisExample,
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
@@ -591,14 +517,20 @@ class _PreviewSection extends StatelessWidget {
 
               const SizedBox(height: 12),
 
-              // 점수 항목
-              _ScoreRow(label: '청결도', score: 82, color: const Color(0xFF4CAF50)),
+              _ScoreRow(
+                  label: l10n.cleanlinessLabel,
+                  score: 82,
+                  scoreUnit: l10n.scoreUnit,
+                  color: const Color(0xFF4CAF50)),
               const SizedBox(height: 6),
-              _ScoreRow(label: '정리력', score: 65, color: const Color(0xFFFF9800)),
+              _ScoreRow(
+                  label: l10n.organizationLabel,
+                  score: 65,
+                  scoreUnit: l10n.scoreUnit,
+                  color: const Color(0xFFFF9800)),
 
               const SizedBox(height: 12),
 
-              // 팩폭 한 줄
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -636,15 +568,20 @@ class _PreviewSection extends StatelessWidget {
 class _ScoreRow extends StatelessWidget {
   final String label;
   final int score;
+  final String scoreUnit;
   final Color color;
-  const _ScoreRow({required this.label, required this.score, required this.color});
+  const _ScoreRow(
+      {required this.label,
+      required this.score,
+      required this.scoreUnit,
+      required this.color});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
         SizedBox(
-          width: 46,
+          width: 52,
           child: Text(
             label,
             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
@@ -664,7 +601,7 @@ class _ScoreRow extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Text(
-          '$score점',
+          '$score$scoreUnit',
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.bold,
@@ -698,6 +635,7 @@ class _GradientAnalyzeButtonState extends State<_GradientAnalyzeButton> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return GestureDetector(
       onTapDown:
           widget.enabled ? (_) => setState(() => _pressed = true) : null,
@@ -743,8 +681,8 @@ class _GradientAnalyzeButtonState extends State<_GradientAnalyzeButton> {
                   )
                 : Text(
                     widget.enabled
-                        ? '🚀  분석 시작하기'
-                        : '사진을 선택하면 시작됩니다',
+                        ? l10n.analyzeStartEnabled
+                        : l10n.analyzeStartDisabled,
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -754,6 +692,135 @@ class _GradientAnalyzeButtonState extends State<_GradientAnalyzeButton> {
                       letterSpacing: 0.3,
                     ),
                   ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── 언어별 타이틀 이미지 ────────────────────────────────────────
+
+class _LocaleTitle extends StatelessWidget {
+  static String _titleAsset(String langCode) {
+    switch (langCode) {
+      case 'en':
+        return 'assets/title_en.png';
+      case 'ja':
+        return 'assets/title_ja.png';
+      case 'vi':
+        return 'assets/title_vi.png';
+      default:
+        return 'assets/title.png';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = Localizations.localeOf(context).languageCode;
+    return Image.asset(
+      _titleAsset(lang),
+      height: 55,
+      fit: BoxFit.contain,
+    );
+  }
+}
+
+// ─── [TEST] 언어 전환 버튼 ─────────────────────────────────────
+
+class _LangPickerButton extends StatelessWidget {
+  static const _langs = [
+    ('🇰🇷', '한국어', 'ko'),
+    ('🇺🇸', 'English', 'en'),
+    ('🇯🇵', '日本語', 'ja'),
+    ('🇻🇳', 'Tiếng Việt', 'vi'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final current = Localizations.localeOf(context).languageCode;
+    final currentFlag = _langs
+        .firstWhere((l) => l.$3 == current, orElse: () => _langs.first)
+        .$1;
+
+    return GestureDetector(
+      onTap: () => _showPicker(context, current),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: _kPurple.withAlpha(20),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: _kPurple.withAlpha(60)),
+          ),
+          child: Text(currentFlag, style: const TextStyle(fontSize: 16)),
+        ),
+      ),
+    );
+  }
+
+  void _showPicker(BuildContext context, String current) {
+    final provider = context.read<LocaleProvider>();
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '[TEST] 언어 선택',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ..._langs.map((lang) {
+                final isSelected = lang.$3 == current;
+                return ListTile(
+                  leading: Text(lang.$1,
+                      style: const TextStyle(fontSize: 22)),
+                  title: Text(
+                    lang.$2,
+                    style: TextStyle(
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                      color: isSelected ? _kPurple : null,
+                    ),
+                  ),
+                  trailing: isSelected
+                      ? const Icon(Icons.check_rounded, color: _kPurple)
+                      : null,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  onTap: () {
+                    provider.setLocale(Locale(lang.$3));
+                    Navigator.pop(ctx);
+                  },
+                );
+              }),
+              const SizedBox(height: 4),
+            ],
           ),
         ),
       ),

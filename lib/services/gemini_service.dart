@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:typed_data';
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http;
 
 class GeminiService {
   static const _modelName = 'gemini-flash-latest';
+  static String? _cachedKey;
 
   static const _systemPrompt = '''
 당신은 사진을 기반으로 대상의 상태를 정밀하게 진단하는 지능형 상태 분석 전문가입니다.
@@ -47,23 +50,59 @@ status_color_code 기준:
 - 0.0~0.49: #F44336 (빨강 - 위험)
 ''';
 
-  late final GenerativeModel _model;
+  Future<String> _fetchApiKey() async {
+    if (_cachedKey != null) return _cachedKey!;
+    final serverUrl = dotenv.env['SERVER_URL'] ?? '';
+    final response = await http.get(Uri.parse('$serverUrl/gemini-key'));
+    if (response.statusCode != 200) {
+      throw Exception('API 키 요청 실패: ${response.statusCode}');
+    }
+    _cachedKey = (jsonDecode(response.body) as Map<String, dynamic>)['api_key'] as String;
+    return _cachedKey!;
+  }
 
-  GeminiService() {
-    final apiKey = dotenv.env['GEMINI_API_KEY'] ?? '';
-    _model = GenerativeModel(
-      model: _modelName,
-      apiKey: apiKey,
-      systemInstruction: Content.system(_systemPrompt),
-      generationConfig: GenerationConfig(
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-      ),
-    );
+  static String _languageInstruction(String langCode) {
+    switch (langCode) {
+      case 'en':
+        return r'''
+
+IMPORTANT: Write ALL text content fields (target_name, summary, one_liner_dis, key_characteristics, detailed_description, recommendations) in English.
+
+Tone guide — write like a brutally honest interior critic who moonlights as a stand-up comedian:
+- one_liner_dis: One sharp, dry-wit sentence that gently roasts the subject. The reader should laugh, then wince slightly. Think Gordon Ramsay meets design critic.
+  Bad: "This room could use some cleaning."
+  Good: "The dust bunnies here have organized, filed for union rights, and are demanding better working conditions."
+  Bad: "Nice room, but a bit cluttered."
+  Good: "Maximalism is a valid design choice — or that's what people tell themselves when they can't find the floor."
+  Bad: "This food looks old."
+  Good: "This was probably delicious... sometime during the last administration."
+- summary: One punchy sentence that captures the vibe. Evocative, slightly dramatic. Not bland. E.g. "This room doesn't need a renovation — it needs an exorcism." / "Points for ambition. Zero points for execution."
+''';
+      case 'ja':
+        return '\n\n重要：target_name、summary、one_liner_dis、key_characteristics、detailed_description、recommendationsの全テキストフィールドを日本語で記述してください。one_liner_disはウィットに富んだ日本語ユーモアスタイルにしてください。';
+      case 'vi':
+        return '\n\nQUAN TRỌNG: Viết tất cả nội dung văn bản (target_name, summary, one_liner_dis, key_characteristics, detailed_description, recommendations) bằng tiếng Việt. one_liner_dis phải hài hước và thú vị theo phong cách Việt Nam.';
+      default:
+        return '';
+    }
   }
 
   Stream<String> analyzeImageStream(
-      Uint8List imageBytes, String mimeType) async* {
+      Uint8List imageBytes, String mimeType, {String languageCode = 'ko'}) async* {
+    final apiKey = await _fetchApiKey();
+
+    final systemPrompt = _systemPrompt + _languageInstruction(languageCode);
+
+    final model = GenerativeModel(
+      model: _modelName,
+      apiKey: apiKey,
+      systemInstruction: Content.system(systemPrompt),
+      generationConfig: GenerationConfig(
+        responseMimeType: 'application/json',
+        temperature: languageCode == 'ko' ? 0.7 : 0.8,
+      ),
+    );
+
     final content = [
       Content.multi([
         DataPart(mimeType, imageBytes),
@@ -71,7 +110,7 @@ status_color_code 기준:
       ]),
     ];
 
-    final stream = _model.generateContentStream(content);
+    final stream = model.generateContentStream(content);
     await for (final chunk in stream) {
       final text = chunk.text;
       if (text != null && text.isNotEmpty) {

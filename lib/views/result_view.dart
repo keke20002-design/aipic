@@ -10,6 +10,7 @@ import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import '../l10n/app_localizations.dart';
 import '../models/analysis_result.dart';
 import '../services/ad_service.dart';
 import '../services/share_card_content.dart';
@@ -24,6 +25,33 @@ class ResultView extends StatefulWidget {
 
 class _ResultViewState extends State<ResultView> {
   final _shareCardKey = GlobalKey();
+  bool _adShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final vm = context.read<AnalysisViewModel>();
+      vm.addListener(_onVmChanged);
+      _maybeShowAd(vm);
+    });
+  }
+
+  @override
+  void dispose() {
+    context.read<AnalysisViewModel>().removeListener(_onVmChanged);
+    super.dispose();
+  }
+
+  void _onVmChanged() => _maybeShowAd(context.read<AnalysisViewModel>());
+
+  void _maybeShowAd(AnalysisViewModel vm) {
+    if (!vm.awaitingAdBeforeResult || _adShown) return;
+    _adShown = true;
+    AdService().showRewardedAd(onComplete: () {
+      if (mounted) vm.revealResult();
+    });
+  }
 
   // 공유 카드 전체를 PNG로 캡처
   Future<Uint8List?> _captureCard() async {
@@ -42,11 +70,12 @@ class _ResultViewState extends State<ResultView> {
   }
 
   Future<void> _shareAsImage(BuildContext ctx) async {
+    final l10n = AppLocalizations.of(ctx);
     final bytes = await _captureCard();
     if (bytes == null) {
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('공유 준비 중 오류가 발생했습니다')),
+          SnackBar(content: Text(l10n.shareError)),
         );
       }
       return;
@@ -54,30 +83,31 @@ class _ResultViewState extends State<ResultView> {
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/aipic_share.png');
     await file.writeAsBytes(bytes);
-    await Share.shareXFiles([XFile(file.path)], text: '내 방 분석 결과 🏠');
+    await Share.shareXFiles([XFile(file.path)]);
   }
 
   Future<void> _saveAsImage(BuildContext ctx) async {
+    final l10n = AppLocalizations.of(ctx);
     final bytes = await _captureCard();
     if (bytes == null) {
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('저장 준비 중 오류가 발생했습니다')),
+          SnackBar(content: Text(l10n.saveError)),
         );
       }
       return;
     }
     try {
-      await Gal.putImageBytes(bytes, album: 'A.I 방구석팩폭');
+      await Gal.putImageBytes(bytes, album: 'A.I Room Roast');
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('갤러리에 저장됐습니다 📸')),
+          SnackBar(content: Text(l10n.savedToGallery)),
         );
       }
     } catch (e) {
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('갤러리 저장에 실패했습니다')),
+          SnackBar(content: Text(l10n.saveToGalleryFailed)),
         );
       }
     }
@@ -93,7 +123,7 @@ class _ResultViewState extends State<ResultView> {
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: const Text('분석 결과'),
+        title: Text(AppLocalizations.of(context).analysisResult),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -115,6 +145,7 @@ class _ResultViewState extends State<ResultView> {
                   child: vm.state == AnalysisState.error
                       ? _ErrorView(
                           message: vm.errorMessage,
+                          onRetry: () => vm.analyzeImage(),
                           onBack: () {
                             vm.reset();
                             Navigator.of(context).pop();
@@ -124,9 +155,12 @@ class _ResultViewState extends State<ResultView> {
                           ? _StreamingView(
                               text: vm.streamedText,
                               imageBytes: vm.imageBytes,
+                              steps: AppLocalizations.of(context).streamingSteps,
+                              drips: AppLocalizations.of(context).streamingDrips,
                             )
                           : _ResultBody(
                               result: result,
+                              imageBytes: vm.imageBytes,
                               onShare: () => _shareAsImage(context),
                               onSave: () => _saveAsImage(context),
                             ),
@@ -153,7 +187,7 @@ class _ResultViewState extends State<ResultView> {
                       alignment: Alignment.topLeft,
                       child: RepaintBoundary(
                         key: _shareCardKey,
-                        child: ShareCard(result: result),
+                        child: ShareCard(result: result, imageBytes: vm.imageBytes),
                       ),
                     ),
                   ),
@@ -171,7 +205,14 @@ class _ResultViewState extends State<ResultView> {
 class _StreamingView extends StatefulWidget {
   final String text;
   final Uint8List? imageBytes;
-  const _StreamingView({required this.text, this.imageBytes});
+  final List<String> steps;
+  final List<String> drips;
+  const _StreamingView({
+    required this.text,
+    this.imageBytes,
+    required this.steps,
+    required this.drips,
+  });
 
   @override
   State<_StreamingView> createState() => _StreamingViewState();
@@ -183,18 +224,6 @@ class _StreamingViewState extends State<_StreamingView>
   late AnimationController _scanCtrl;
   late Animation<Color?> _colorAnim;
 
-  static const _steps = [
-    '🧠 AI가 방 구조 분석 중...',
-    '📦 물건 밀집도 계산 중...',
-    '🧹 청결 상태 스캔 중...',
-    '😶 팩폭 문장 생성 중...',
-  ];
-
-  static const _drips = [
-    '"흠… 이건 좀 정리가 필요해 보이는데"',
-    '"잠깐만… 이건 예상보다 심각한데?"',
-    '"AI가 고민 중입니다… 말해도 될지"',
-  ];
 
   int _stepIndex = 0;
   int _dripIndex = -1;
@@ -247,15 +276,12 @@ class _StreamingViewState extends State<_StreamingView>
     _timer = Timer.periodic(const Duration(milliseconds: 3000), (_) {
       if (!mounted) return;
       setState(() {
-        // 단계 텍스트: 계속 순환
-        _stepIndex = (_stepIndex + 1) % _steps.length;
-        // 드립: 계속 순환
+        _stepIndex = (_stepIndex + 1) % widget.steps.length;
         if (_dripIndex == -1) {
           _dripIndex = 0;
         } else {
-          _dripIndex = (_dripIndex + 1) % _drips.length;
+          _dripIndex = (_dripIndex + 1) % widget.drips.length;
         }
-        // 진행률: 7단계까지만 올라감 (최대에서 고정)
         if (_percentStage < _fakePercents.length - 1) {
           _percentStage++;
         }
@@ -348,9 +374,9 @@ class _StreamingViewState extends State<_StreamingView>
                             ),
                           ),
                           const SizedBox(height: 4),
-                          const Text(
-                            '분석 진행 중',
-                            style: TextStyle(
+                          Text(
+                            AppLocalizations.of(context).analyzing,
+                            style: const TextStyle(
                               fontSize: 12,
                               color: Colors.white70,
                             ),
@@ -388,7 +414,7 @@ class _StreamingViewState extends State<_StreamingView>
             transitionBuilder: (child, anim) =>
                 FadeTransition(opacity: anim, child: child),
             child: Text(
-              _steps[_stepIndex],
+              widget.steps[_stepIndex],
               key: ValueKey(_stepIndex),
               style: theme.textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w600),
@@ -399,7 +425,7 @@ class _StreamingViewState extends State<_StreamingView>
           // ── 스텝 인디케이터 점 ──
           Row(
             mainAxisSize: MainAxisSize.min,
-            children: List.generate(_steps.length, (i) {
+            children: List.generate(widget.steps.length, (i) {
               return AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
                 margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -436,7 +462,7 @@ class _StreamingViewState extends State<_StreamingView>
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text(
-                        _drips[_dripIndex],
+                        widget.drips[_dripIndex],
                         style: TextStyle(
                           fontSize: 13,
                           fontStyle: FontStyle.italic,
@@ -463,7 +489,8 @@ class _StreamingViewState extends State<_StreamingView>
 class _ErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onBack;
-  const _ErrorView({required this.message, required this.onBack});
+  final VoidCallback onRetry;
+  const _ErrorView({required this.message, required this.onBack, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -476,21 +503,23 @@ class _ErrorView extends StatelessWidget {
             const Icon(Icons.error_outline_rounded,
                 size: 64, color: Color(0xFF6C5CE7)),
             const SizedBox(height: 20),
-            const Text(
-              '분석에 실패했습니다',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Text(
+              AppLocalizations.of(context).analysisFailed,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Text(
-              message.isNotEmpty ? message : '알 수 없는 오류가 발생했습니다.',
+              message.isNotEmpty
+                  ? message
+                  : AppLocalizations.of(context).unknownError,
               style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 28),
             ElevatedButton.icon(
-              onPressed: onBack,
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 16),
-              label: const Text('다시 시도하기'),
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: Text(AppLocalizations.of(context).retryAnalysis),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF6C5CE7),
                 foregroundColor: Colors.white,
@@ -498,6 +527,15 @@ class _ErrorView extends StatelessWidget {
                     horizontal: 28, vertical: 14),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: onBack,
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 14),
+              label: Text(AppLocalizations.of(context).reselectPhoto),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.grey.shade600,
               ),
             ),
           ],
@@ -511,11 +549,13 @@ class _ErrorView extends StatelessWidget {
 
 class _ResultBody extends StatelessWidget {
   final AnalysisResult result;
+  final Uint8List? imageBytes;
   final VoidCallback onShare;
   final VoidCallback onSave;
 
   const _ResultBody({
     required this.result,
+    this.imageBytes,
     required this.onShare,
     required this.onSave,
   });
@@ -538,18 +578,11 @@ class _ResultBody extends StatelessWidget {
     return '😬';
   }
 
-  // 위트있는 상태 메시지
-  String _statusMessage(double score) {
-    if (score >= 0.9) return '거의 완벽 — 손댈 데가 없음';
-    if (score >= 0.8) return '상태 좋음 — 딱히 건드릴 게 없는데요';
-    if (score >= 0.6) return '나쁘지 않은데, 조금 아쉽긴 함';
-    if (score >= 0.4) return '슬슬 손 봐야 할 시점';
-    return '지금 당장 조치가 필요합니다';
-  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
     final statusColor = _parseColor(result.statusColorCode);
 
     return SingleChildScrollView(
@@ -557,14 +590,25 @@ class _ResultBody extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ── 스코어 게이지 ──
+          if (imageBytes != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.memory(
+                imageBytes!,
+                height: 200,
+                width: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.05, end: 0),
+
+          if (imageBytes != null) const SizedBox(height: 16),
+
           Center(
             child: _AnimatedScoreGauge(
                 score: result.stateScore, color: statusColor),
           ),
           const SizedBox(height: 8),
 
-          // ── 대상 이름 ──
           Center(
             child: Text(
               result.targetName,
@@ -574,7 +618,6 @@ class _ResultBody extends StatelessWidget {
             ),
           ).animate().fadeIn(delay: 200.ms),
 
-          // ── 상태 이모지 + 메시지 ──
           const SizedBox(height: 8),
           Center(
             child: Column(
@@ -585,7 +628,7 @@ class _ResultBody extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  _statusMessage(result.stateScore),
+                  l10n.statusMessage(result.stateScore),
                   style: TextStyle(
                     color: statusColor,
                     fontWeight: FontWeight.w600,
@@ -631,37 +674,84 @@ class _ResultBody extends StatelessWidget {
           if (result.oneLineDis.isNotEmpty) ...[
             const SizedBox(height: 10),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.amber.withAlpha(20),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.amber.withAlpha(60)),
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Colors.deepOrange.withAlpha(120),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.orange.withAlpha(60),
+                    blurRadius: 16,
+                    spreadRadius: 2,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('💬', style: TextStyle(fontSize: 18)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      result.oneLineDis,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontStyle: FontStyle.italic,
-                        color: Colors.amber.shade800,
-                        fontWeight: FontWeight.w500,
+                  // AI FACT 배지
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    decoration: const BoxDecoration(
+                      color: Colors.deepOrange,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(14),
+                        bottomRight: Radius.circular(12),
                       ),
+                    ),
+                    child: const Text(
+                      '🔥 AI FACT',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  // 본문
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          result.stateScore >= 0.8
+                              ? '😏'
+                              : result.stateScore >= 0.5
+                                  ? '😬'
+                                  : '💀',
+                          style: const TextStyle(fontSize: 22),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            result.oneLineDis,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF4A2800),
+                              height: 1.6,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
-            ).animate().fadeIn(delay: 420.ms),
+            ).animate().fadeIn(delay: 420.ms).slideY(begin: 0.05, end: 0),
           ],
 
           const SizedBox(height: 20),
 
-          // ── 상세 설명 (접기/펼치기) ──
           _CollapsibleSectionCard(
-            title: '상세 설명',
+            title: l10n.detailedDescription,
             icon: Icons.description_outlined,
             child: Text(
               result.detailedDescription,
@@ -671,9 +761,8 @@ class _ResultBody extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // ── 주요 특징 (배지 스타일) ──
           _SectionCard(
-            title: '주요 특징',
+            title: l10n.keyFeatures,
             icon: Icons.emoji_events_outlined,
             child: _BadgeCharacteristics(
               characteristics: result.keyCharacteristics,
@@ -690,14 +779,13 @@ class _ResultBody extends StatelessWidget {
 
           const SizedBox(height: 32),
 
-          // ── 하단 액션 버튼 ──
           Row(
             children: [
               Expanded(
                 flex: 3,
                 child: _PrimaryShareButton(
                   icon: Icons.share_rounded,
-                  label: '이 정도면 자랑 가능?',
+                  label: l10n.shareQuestion,
                   onTap: onShare,
                 ),
               ),
@@ -706,7 +794,7 @@ class _ResultBody extends StatelessWidget {
                 flex: 3,
                 child: _SecondaryButton(
                   icon: Icons.save_alt_rounded,
-                  label: '결과 저장해두기',
+                  label: l10n.saveResult,
                   onTap: onSave,
                 ),
               ),
@@ -903,12 +991,14 @@ class _BadgeCharacteristics extends StatelessWidget {
                   children: [
                     const Text('🏅', style: TextStyle(fontSize: 14)),
                     const SizedBox(width: 6),
-                    Text(
-                      c,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: theme.colorScheme.onPrimaryContainer,
+                    Flexible(
+                      child: Text(
+                        c,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.onPrimaryContainer,
+                        ),
                       ),
                     ),
                   ],
@@ -991,7 +1081,7 @@ class _UpgradeChecklistItem extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                '+$scoreBoost 점',
+                AppLocalizations.of(context).scoreBoostLabel(scoreBoost),
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
@@ -1027,7 +1117,7 @@ class _CompletionBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        '완료 $percent%',
+        AppLocalizations.of(context).completionPercent(percent),
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
@@ -1173,7 +1263,7 @@ class _CollapsibleSectionCardState extends State<_CollapsibleSectionCard> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
-                    '자세히 보기',
+                    AppLocalizations.of(context).seeMore,
                     style: TextStyle(
                       fontSize: 12,
                       color: theme.colorScheme.primary,
@@ -1242,7 +1332,7 @@ class _AdGatedRecommendationsCardState
              
               const SizedBox(width: 8),
               Text(
-                '🔓 히든 결과 해제',
+                AppLocalizations.of(context).unlockHiddenResult,
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: theme.colorScheme.primary,
@@ -1282,7 +1372,7 @@ class _AdGatedRecommendationsCardState
                               style: TextStyle(fontSize: 24)),
                           const SizedBox(height: 6),
                           Text(
-                            '이 정도로 만족할 건 아니죠?',
+                            AppLocalizations.of(context).notSatisfied,
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
@@ -1291,7 +1381,7 @@ class _AdGatedRecommendationsCardState
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '간단히 보고 잠금 해제',
+                            AppLocalizations.of(context).watchToUnlock,
                             style: TextStyle(
                               fontSize: 11,
                               color: theme.colorScheme.onSurfaceVariant,
@@ -1379,15 +1469,19 @@ class _PrimaryShareButtonState extends State<_PrimaryShareButton> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(widget.icon, size: 20, color: Colors.white),
-              const SizedBox(width: 8),
-              Text(
-                widget.label,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: 0.2,
+              Icon(widget.icon, size: 18, color: Colors.white),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  widget.label,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 0.1,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ),
             ],
@@ -1450,14 +1544,18 @@ class _SecondaryButtonState extends State<_SecondaryButton> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(widget.icon,
-                  size: 20, color: theme.colorScheme.primary),
+                  size: 18, color: theme.colorScheme.primary),
               const SizedBox(width: 6),
-              Text(
-                widget.label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: theme.colorScheme.primary,
+              Flexible(
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.primary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ),
             ],

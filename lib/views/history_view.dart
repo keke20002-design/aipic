@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_localizations.dart';
 import '../models/analysis_result.dart';
 import '../services/ad_service.dart';
 import '../services/history_service.dart';
@@ -31,18 +32,19 @@ class _HistoryViewState extends State<HistoryView> {
   }
 
   Future<void> _clearAll() async {
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('기록 전체 삭제'),
-        content: const Text('모든 분석 기록을 삭제할까요?'),
+        title: Text(l10n.deleteAllTitle),
+        content: Text(l10n.deleteAllContent),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('취소')),
+              child: Text(l10n.cancel)),
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('삭제', style: TextStyle(color: Colors.red))),
+              child: Text(l10n.delete, style: const TextStyle(color: Colors.red))),
         ],
       ),
     );
@@ -61,25 +63,26 @@ class _HistoryViewState extends State<HistoryView> {
     }
   }
 
-  String _formatDate(DateTime dt) {
+  String _formatDate(DateTime dt, AppLocalizations l10n) {
     final now = DateTime.now();
     final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return '방금 전';
-    if (diff.inHours < 1) return '${diff.inMinutes}분 전';
-    if (diff.inDays < 1) return '${diff.inHours}시간 전';
-    if (diff.inDays < 7) return '${diff.inDays}일 전';
+    if (diff.inMinutes < 1) return l10n.justNow;
+    if (diff.inHours < 1) return l10n.minutesAgo(diff.inMinutes);
+    if (diff.inDays < 1) return l10n.hoursAgo(diff.inHours);
+    if (diff.inDays < 7) return l10n.daysAgo(diff.inDays);
     return '${dt.month}/${dt.day}';
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: const Text('분석 기록',
-            style: TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(l10n.analysisHistory,
+            style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -87,7 +90,7 @@ class _HistoryViewState extends State<HistoryView> {
           if (_history.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: '전체 삭제',
+              tooltip: l10n.deleteAll,
               onPressed: _clearAll,
             ),
         ],
@@ -110,7 +113,7 @@ class _HistoryViewState extends State<HistoryView> {
                     itemBuilder: (ctx, i) => _HistoryCard(
                       result: _history[i],
                       statusColor: _parseColor(_history[i].statusColorCode),
-                      dateLabel: _formatDate(_history[i].timestamp),
+                      dateLabel: _formatDate(_history[i].timestamp, l10n),
                       onDelete: () => _delete(i),
                     ),
                   ),
@@ -287,14 +290,14 @@ class _EmptyState extends StatelessWidget {
               size: 72, color: theme.colorScheme.outlineVariant),
           const SizedBox(height: 16),
           Text(
-            '아직 분석 기록이 없어요',
+            AppLocalizations.of(context).noHistory,
             style: theme.textTheme.titleMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 6),
           Text(
-            '사진을 분석하면 여기에 자동으로 저장됩니다',
+            AppLocalizations.of(context).noHistoryDesc,
             style: TextStyle(
               fontSize: 13,
               color: theme.colorScheme.onSurfaceVariant.withAlpha(160),

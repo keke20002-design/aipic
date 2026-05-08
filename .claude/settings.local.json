@@ -11,7 +11,13 @@
       "Bash(powershell -Command \"\\(Get-ChildItem ''C:\\\\Users\\\\test\\\\StudioProjects\\\\aipic\\\\build'' -Recurse | Measure-Object -Property Length -Sum\\).Sum / 1MB\")",
       "Bash(flutter clean:*)",
       "Bash(dart run:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(pip install *)",
+      "Bash(pip show *)",
+      "Bash(curl *)",
+      "Read(//c/Users/admin/AndroidStudioProjects/**)",
+      "Bash(flutter devices *)",
+      "Bash(flutter run *)"
     ]
   }
 }
